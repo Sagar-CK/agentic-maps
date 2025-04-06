@@ -24,6 +24,14 @@ class Message(BaseModel):
     role: str
     content: str
 
+class Relevancy(BaseModel):
+    id: str
+    relevancy: float
+
 class ChatRequest(BaseModel):
     location: Location
     messages: List[Message]
+    proposed_location_ids = Optional[List[Relevancy]]
+
+class Relevancies(BaseModel):
+    relevancies: List[Relevancy]

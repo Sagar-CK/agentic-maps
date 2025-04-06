@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException
-from schemas import ChatRequest, Place
+from schemas import ChatRequest, Place, Relevancies
 from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 import os
@@ -44,6 +44,7 @@ async def get_places(search_query: str):
             data = r.json()
             
             places = []
+            complete_places = []
             for place in data.get("places", []):
                 if not place.get("currentOpeningHours") or not place.get("currentOpeningHours").get("openNow"):
                     continue
@@ -53,6 +54,7 @@ async def get_places(search_query: str):
                     continue
                 if not place.get("location") or not place.get("location").get("latitude") or not place.get("location").get("longitude"):
                     continue
+                complete_places.append(place)
                 places.append(Place(
                     id=place.get("id"),
                     url=place.get("websiteUri"),
@@ -63,7 +65,9 @@ async def get_places(search_query: str):
                     latitude=place.get("location").get("latitude"),
                     longitude=place.get("location").get("longitude"),
                 ))
-                print(place)
+            
+            with open("places.json", "w") as f:
+                json.dump(complete_places, f, indent=4)
             
             return places
                 
@@ -75,9 +79,7 @@ async def get_places(search_query: str):
 async def chat(request: ChatRequest):
     async def event_stream():
         try:
-            
             if(len(request.messages) == 0):
-                    
                 # get a search query from the messages overall
                 search_query = client.models.generate_content(
                     model='gemini-2.0-flash-001',
@@ -107,26 +109,40 @@ async def chat(request: ChatRequest):
                 yield f"event: response\ndata: {json.dumps(response_builder)}\n\n"
                 yield "event: end\ndata: {}\n\n"
             else:
-                # get a search query from the messages overall
-                search_query = client.models.generate_content(
+                
+                complete_places = ""
+                with open("places.json", "r") as f:
+                    complete_places = json.load(f)
+                
+                # ask the model based on the conversation history to map the places to new relevancy scores
+                relevancies = client.models.generate_content(
                     model='gemini-2.0-flash-001',
-                    contents=f"Extract a google maps search query from the messages overall {str(request.messages)}",
+                    contents=f"Map the places to new relevancy scores based on the conversation history {str(request.messages)}",
                     config=types.GenerateContentConfig(
-                        system_instruction=constants.REWRITE_SEARCH_QUERY
+                        system_instruction=constants.MAP_PLACES_TO_RELEVANCY,
+                        response_mime_type="application/json",
+                        response_schema=Relevancies,
                     )
-                ).text
+                ).parsed
                 
-                print(search_query)
-                
-                places = await get_places(search_query)
-
-                response_builder = {
-                    "response": "",
-                    "places": [],
-                }
+                # create the new places based on the relevancies
+                places = []
+                for relevancy in relevancies.relevancies:
+                    for place in complete_places:
+                        if place.get("id") == relevancy.id:
+                            places.append(Place(
+                                id=place.get("id"),
+                                url=place.get("websiteUri"),
+                                website_url=place.get("googleMapsUri"),
+                                name=place.get("displayName").get("text"),
+                                type=place.get("primaryType"),
+                                relevancy=relevancy.relevancy,
+                                latitude=place.get("location").get("latitude"),
+                                longitude=place.get("location").get("longitude"),
+                            ))
 
                 for chunk in client.models.generate_content_stream(
-                    model='gemini-2.0-flash-001', contents=f"Describe the places overall briefly {str(places)}"
+                    model='gemini-2.0-flash-001', contents=f"Describe the new places overall briefly {str(places)}, these were the old relevancies {str(relevancies)}"
                 ):
                     if chunk and chunk.text:
                         response_builder["response"] += chunk.text
