@@ -1,17 +1,38 @@
-import { GenerativeModel, GoogleGenerativeAI } from "@google/generative-ai";
-import { IPlace } from "./models/IPlace";
+import { GoogleGenAI, Type } from "@google/genai";
+import OpenAI from "openai";
+import { zodResponseFormat } from "openai/helpers/zod";
+import { z } from "zod";
+const openai = new OpenAI({
+  baseURL: "https://openrouter.ai/api/v1",
+  apiKey: process.env.OPENROUTER_API_KEY!,
+});
+
+interface OpenRouterResponse {
+  choices: Array<{
+    message: {
+      content: string;
+    };
+  }>;
+}
+
+type RelevanceResultType = {
+    relevance: number;
+    reason: string;
+}
+const RelevanceResultSchema: z.ZodType<RelevanceResultType> = z.lazy(() => z.object({
+  relevance: z.number().describe("A number between 1.0 and 10.0 indicating the relevance of the place to the user prompt."),
+  reason: z.string().describe("A string explaining the relevance of the place to the search and user prompt."),
+}));
 
 export class SearchHandler {
-  private genAI: GoogleGenerativeAI;
-  private flashModel: GenerativeModel;
+  private genAI: GoogleGenAI;
   private mapsAPIKey: string = process.env.GOOGLE_BEARER_TOKEN!;
   private googlePlacesApiUrl: string =
-    "https://places.googleapis.com/v1/places:searchText";
+    "https://places.googleapis.com/v1/places:searchText?fields=*";
 
   constructor() {
-    this.genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
-    this.flashModel = this.genAI.getGenerativeModel({
-      model: "gemini-2.0-flash-001",
+    this.genAI = new GoogleGenAI({
+      apiKey: process.env.GOOGLE_API_KEY!,
     });
   }
 
@@ -20,14 +41,12 @@ export class SearchHandler {
    * @param searchQuery The search query to search for.
    * @returns A list of places.
    */
-  public async searchMaps(searchQuery: string): Promise<IPlace[]> {
+  public async searchMaps(searchQuery: string): Promise<any[]> {
     const headers = {
       Authorization: `Bearer ${this.mapsAPIKey}`,
       Accept: "application/json",
       "Content-Type": "application/json",
-      "X-Goog-User-Project": "engaged-code-449416-j9",
-      "X-Goog-FieldMask":
-        "places.location,places.displayName,places.name,places.primaryType,places.rating,places.userRatingCount,places.googleMapsUri,places.websiteUri,places.currentOpeningHours,places.id",
+      "X-Goog-User-Project": "engaged-code-449416-j9"
     };
 
     const body = {
@@ -36,7 +55,7 @@ export class SearchHandler {
 
     try {
       const response = await fetch(
-        `${this.googlePlacesApiUrl}?key=${this.mapsAPIKey}`,
+        this.googlePlacesApiUrl,
         {
           method: "POST",
           headers,
@@ -49,45 +68,80 @@ export class SearchHandler {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      const data = (await response.json()) as {
-        places?: Array<{
-          id: string;
-          websiteUri?: string;
-          googleMapsUri?: string;
-          displayName?: { text?: string };
-          primaryType?: string;
-          rating?: number;
-          userRatingCount?: number;
-          location?: {
-            latitude: number;
-            longitude: number;
-          };
-        }>;
-      };
-
-      const places: IPlace[] = [];
-      for (const place of data.places || []) {
-        if (!place.userRatingCount || place.userRatingCount < 50) continue;
-        if (place.rating && place.rating <= 3.0) continue;
-        if (!place.location?.latitude || !place.location?.longitude) continue;
-
-        places.push({
-          id: place.id,
-          url: place.websiteUri,
-          website_url: place.googleMapsUri,
-          name: place.displayName?.text,
-          type: place.primaryType,
-          relevancy: 1,
-          rating: place.rating,
-          latitude: place.location.latitude,
-          longitude: place.location.longitude,
-        });
-      }
-
-      return places;
+      const json = await response.json() as { places: any[] };
+      return json.places;
     } catch (error) {
       console.error("Error fetching places:", error);
       throw error;
+    }
+  }
+
+  /**
+   * Semantically combines two user prompts into a single prompt.
+   * @param previousPrompt The previous user prompt.
+   * @param newPrompt The new user prompt.
+   * @returns The combined user prompt.
+   */
+  public async getCombinedUserPrompt(previousPrompt: string, newPrompt: string): Promise<string> {
+    const response = await this.genAI.models.generateContent({
+        model: 'gemini-2.0-flash',
+        contents: [{
+            role: "system",
+            parts: [{text: `You are a helpful assistant that is given two prompts containing prefferences for choosing a place (e.g. restaurant, club, museum, etc...). Your task is to combine the two prompts into a single prompt without losing any crucial information.
+                The previous prompt is ${previousPrompt} and the new prompt is ${newPrompt}.`}]
+        }],
+        config: {
+            temperature: 0.05
+        }
+    })
+
+    if (!response.text) {
+        throw new Error("getCombinedUserPrompt - No response from Gemini");
+    }
+    
+    return response.text
+}
+
+  /**
+   * Applies a user prompt to a specific place to retrieve a relevance score.
+   * @param place The place to apply the prompt to.
+   * @param searchPrompt The base prompt for the search.
+   * @param userPrompt The prompt to apply to the place.
+   * @returns The relevance score.
+   */
+  public async getRelevance(place: any, searchPrompt: string, userPrompt: string): Promise<RelevanceResultType> {
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        {
+          role: "system",
+          content: `You are a judge of relevance. You are looking for a place that matches the following prompt: ${searchPrompt}. 
+          Given the information about a place below and specific preferences from the user evaluate the relevance of the place on a scale from 1.0 to 10.0.
+          
+          Place: ${JSON.stringify(place)}`
+        },
+        {
+          role: "user",
+          content: userPrompt
+        }
+      ],
+      response_format: zodResponseFormat(RelevanceResultSchema, "relevance_result")
+    });
+
+    
+    if (!response || !response.choices[0].message.content) {
+      throw new Error("No content received from OpenAI");
+    }
+    
+    try {
+      const result = JSON.parse(response.choices[0].message.content);
+      //console.log(`----\n[${JSON.stringify(place.displayName)}]\n${response.choices[0].message.content}\n----`)
+      return {
+        reason: result.reason,
+        relevance: result.relevance
+      };
+    } catch (error) {
+      throw new Error("Failed to parse OpenAI response as JSON");
     }
   }
 }

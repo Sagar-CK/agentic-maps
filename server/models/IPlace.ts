@@ -1,3 +1,4 @@
+// Deprecated
 export interface IPlace {
   id: string;
   latitude: number;

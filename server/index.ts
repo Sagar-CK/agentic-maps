@@ -38,6 +38,10 @@ wss.on("connection", function connection(ws) {
           handleJoinSearchSession(ws, parsedData, session.id);
           break;
 
+        case "ADJUST_SEARCH_SESSION":
+          handleAdjustSearchSession(ws, parsedData, session.id);
+          break;
+
         // Handle unrecognized message types
         default:
           ws.send(
@@ -134,5 +138,51 @@ const handleJoinSearchSession = async (
         message: "Search session not found",
       }),
     );
+  }
+};
+
+const handleAdjustSearchSession = async (
+  ws: WebSocket,
+  parsedData: any,
+  userSessionId: string,
+) => {
+  const searchSessionId = parsedData.searchSessionId;
+  const prompt = parsedData.prompt;
+  const searchSession = searchSessionManager.getSearch(searchSessionId);
+
+  if (!searchSession) {
+    ws.send(
+      JSON.stringify({
+        type: "error",
+        message: "Search session not found",
+      }),
+    );
+    return;
+  }
+
+  const session = await searchSessionManager.adjustSearch(
+    searchSessionId,
+    userSessionId,
+    prompt,
+  );
+
+  ws.send(
+    JSON.stringify({
+      type: "searchSessionAdjusted",
+      session: session,
+    }),
+  );
+
+  // Distribute the updated session to all users in the search
+  for (const userId of session.userSessionIds) {
+    const userSession = userSessionManager.getSession(userId);
+    if (userSession) {
+      userSession.ws.send(
+        JSON.stringify({
+          type: "searchSessionUpdated",
+          session: session,
+        }),
+      );
+    }
   }
 };
