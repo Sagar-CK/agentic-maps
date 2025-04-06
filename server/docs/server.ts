@@ -1,12 +1,12 @@
-import * as http from 'http';
-import * as fs from 'fs';
-import * as path from 'path';
-import { WebSocketDocsGenerator } from './generator';
+import * as http from "http";
+import * as fs from "fs";
+import * as path from "path";
+import { WebSocketDocsGenerator } from "./generator";
 
 const PORT = 3000;
 
 const server = http.createServer((req, res) => {
-  if (req.url === '/') {
+  if (req.url === "/") {
     // Generate fresh documentation
     const generator = new WebSocketDocsGenerator();
     const markdown = generator.generateMarkdown();
@@ -31,14 +31,14 @@ const server = http.createServer((req, res) => {
       </html>
     `;
 
-    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.writeHead(200, { "Content-Type": "text/html" });
     res.end(html);
   } else {
     res.writeHead(404);
-    res.end('Not found');
+    res.end("Not found");
   }
 });
 
 server.listen(PORT, () => {
   console.log(`Documentation server running at http://localhost:${PORT}`);
-}); 
+});

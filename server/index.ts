@@ -1,7 +1,7 @@
-import { WebSocketServer, WebSocket } from 'ws';
-import { UserSessionManager } from './UserSessionManager';
-import { SearchSessionManager } from './SearchSessionManager';
-import { SearchHandler } from './SearchHandler';
+import { WebSocketServer, WebSocket } from "ws";
+import { UserSessionManager } from "./UserSessionManager";
+import { SearchSessionManager } from "./SearchSessionManager";
+import { SearchHandler } from "./SearchHandler";
 
 // Create session store instance
 const userSessionManager = new UserSessionManager();
@@ -9,98 +9,130 @@ const searchSessionManager = new SearchSessionManager();
 const searchHandler = new SearchHandler();
 
 // Create WebSocket server
-const wss = new WebSocketServer({ 
+const wss = new WebSocketServer({
   port: 1337,
   perMessageDeflate: false,
-  clientTracking: true
+  clientTracking: true,
 });
 
-console.log('Server is running on port 1337');
-wss.on('connection', function connection(ws) {
+console.log("Server is running on port 1337");
+wss.on("connection", function connection(ws) {
   // Create a new session for each connection
   const session = userSessionManager.createSession(ws);
-  console.log(`New session created: ${session.id}`);
+  console.log(`New user session created: ${session.id}`);
 
-  ws.on('message', async function message(data) {
+  ws.on("message", async function message(data) {
     try {
       const parsedData = JSON.parse(data.toString());
       // Update session data
       userSessionManager.updateSession(session.id, parsedData);
-      console.log(`Session ${session.id} updated:`, parsedData);
-      
+      console.log(`Message from user '${session.id}': `, parsedData);
+
       // Handle NEW_SEARCH_SESSION message
-      if (parsedData.type === 'NEW_SEARCH_SESSION') {
-        const searchSession = searchSessionManager.createSearch(parsedData.query);
-        console.log(`New search session created: ${searchSession.id}`);
-        
-        try {
-          const searchResult = await searchHandler.handleSearch(parsedData.messages || []);
-          console.log(`Search result: ${JSON.stringify(searchResult)}`);
-          
-          // Send back the search session information and results
-          ws.send(JSON.stringify({
-            type: 'searchSessionCreated',
-            searchId: searchSession.id,
-            data: {
-              ...searchSession,
-              response: searchResult.response,
-              places: searchResult.places
-            }
-          }));
-        } catch (error) {
-          console.error('Error processing search:', error);
-          ws.send(JSON.stringify({
-            type: 'error',
-            message: 'Error processing search request'
-          }));
-        }
-      }
-      
-      // Handle REFINE_SEARCH message
-      if (parsedData.type === 'REFINE_SEARCH' && parsedData.places) {
-        try {
-          const refinedResult = await searchHandler.handleRefinedSearch(
-            parsedData.messages || [],
-            parsedData.places
+      switch (parsedData.type) {
+        case "NEW_SEARCH_SESSION":
+          handleCreateSearchSession(ws, parsedData, session.id);
+          break;
+
+        case "JOIN_SEARCH_SESSION":
+          handleJoinSearchSession(ws, parsedData, session.id);
+          break;
+
+        // Handle unrecognized message types
+        default:
+          ws.send(
+            JSON.stringify({
+              type: "error",
+              message: "Unrecognized message type",
+            }),
           );
-          
-          ws.send(JSON.stringify({
-            type: 'searchRefined',
-            data: {
-              response: refinedResult.response,
-              places: refinedResult.places
-            }
-          }));
-        } catch (error) {
-          console.error('Error refining search:', error);
-          ws.send(JSON.stringify({
-            type: 'error',
-            message: 'Error refining search results'
-          }));
-        }
       }
-      
-      // Send back the current session data
-      ws.send(JSON.stringify({
-        type: 'sessionUpdate',
-        sessionId: session.id,
-        data: userSessionManager.getSession(session.id)?.data
-      }));
     } catch (error) {
-      console.error('Error processing message:', error);
-      ws.send(JSON.stringify({ type: 'error', message: 'Invalid message format' }));
+      console.error("Error processing message:", error);
+      ws.send(
+        JSON.stringify({ type: "error", message: "Invalid message format" }),
+      );
     }
   });
 
-  ws.on('close', () => {
+  ws.on("close", () => {
     // Clean up session when connection closes
     userSessionManager.deleteSession(session.id);
     console.log(`Session ${session.id} closed and deleted`);
   });
 
   // Send initial session information
-  ws.send(JSON.stringify({
-    type: 'sessionCreated',
-    sessionId: session.id
-  }));
+  ws.send(
+    JSON.stringify({
+      type: "sessionCreated",
+      sessionId: session.id,
+    }),
+  );
 });
+
+const handleCreateSearchSession = async (
+  ws: WebSocket,
+  parsedData: any,
+  userSessionId: string,
+) => {
+  const places = await searchHandler.searchMaps(parsedData.query);
+  const searchSession = searchSessionManager.createSearch(
+    parsedData.query,
+    userSessionId,
+    places,
+  );
+  console.log(
+    `'${userSessionId}' created search session '${searchSession.id}'`,
+  );
+
+  // Send back the search session information and results
+  ws.send(
+    JSON.stringify({
+      type: "searchSessionCreated",
+      session: searchSession,
+    }),
+  );
+};
+
+const handleJoinSearchSession = async (
+  ws: WebSocket,
+  parsedData: any,
+  userSessionId: string,
+) => {
+  const searchSessionId = parsedData.searchSessionId;
+  const searchSession = searchSessionManager.getSearch(searchSessionId);
+
+  if (searchSession) {
+    try {
+      searchSessionManager.joinSearch(searchSessionId, userSessionId);
+      const searchSession = searchSessionManager.getSearch(searchSessionId);
+
+      if (!searchSession) {
+        throw new Error("Search session not found");
+      }
+
+      // Send back the search session information and results
+      ws.send(
+        JSON.stringify({
+          type: "searchSessionJoined",
+          session: searchSession,
+        }),
+      );
+    } catch (error) {
+      console.error("Error processing search:", error);
+      ws.send(
+        JSON.stringify({
+          type: "error",
+          message: "Error processing search request",
+        }),
+      );
+    }
+  } else {
+    ws.send(
+      JSON.stringify({
+        type: "error",
+        message: "Search session not found",
+      }),
+    );
+  }
+};
