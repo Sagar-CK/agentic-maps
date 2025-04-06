@@ -30,7 +30,7 @@ async def get_places(search_query: str):
         "Accept": "application/json",
         "Content-Type": "application/json",
         "X-Goog-User-Project": "engaged-code-449416-j9",
-        "X-Goog-FieldMask": "places.location,places.displayName,places.name,places.primaryType,places.rating,places.userRatingCount,places.googleMapsUri,places.websiteUri,places.currentOpeningHours"
+        "X-Goog-FieldMask": "places.location,places.displayName,places.name,places.primaryType,places.rating,places.userRatingCount,places.googleMapsUri,places.websiteUri,places.currentOpeningHours,places.id",
     }
 
     body = {
@@ -38,8 +38,8 @@ async def get_places(search_query: str):
     }
 
     try:
-        async with httpx.AsyncClient() as client:
-            r = await client.post(GOOGLE_PLACES_API_URL, json=body, headers=headers)
+        async with httpx.AsyncClient() as aclient:
+            r = await aclient.post(GOOGLE_PLACES_API_URL, json=body, headers=headers)
             r.raise_for_status()
             data = r.json()
             
@@ -51,14 +51,19 @@ async def get_places(search_query: str):
                     continue
                 if place.get("rating") and place.get("rating") <= 3.0:
                     continue
-                print(place)
+                if not place.get("location") or not place.get("location").get("latitude") or not place.get("location").get("longitude"):
+                    continue
                 places.append(Place(
+                    id=place.get("id"),
                     url=place.get("websiteUri"),
                     website_url=place.get("googleMapsUri"),
                     name=place.get("displayName").get("text"),
                     type=place.get("primaryType"),
-                    relevancy=place.get("rating", 0)
+                    relevancy=place.get("rating", 0),
+                    latitude=place.get("location").get("latitude"),
+                    longitude=place.get("location").get("longitude"),
                 ))
+                print(place)
             
             return places
                 
@@ -70,34 +75,66 @@ async def get_places(search_query: str):
 async def chat(request: ChatRequest):
     async def event_stream():
         try:
-            # get a search query from the messages overall
-            search_query = client.models.generate_content(
-                model='gemini-2.0-flash-001',
-                contents=f"Extract a google maps search query from the messages overall {str(request.messages)}",
-                config=types.GenerateContentConfig(
-                    system_instruction=constants.REWRITE_SEARCH_QUERY
-                )
-            ).text
             
-            print(search_query)
-            
-            places = await get_places(search_query)
-
-            response_builder = {
-                "response": "",
-                "places": [],
-            }
-
-            for chunk in client.models.generate_content_stream(
-                model='gemini-2.0-flash-001', contents=f"Describe the places overall briefly {str(places)}"
-            ):
-                if chunk and chunk.text:
-                    response_builder["response"] += chunk.text
-                    yield f"event: response\ndata: {json.dumps(response_builder)}\n\n"
+            if(len(request.messages) == 0):
+                    
+                # get a search query from the messages overall
+                search_query = client.models.generate_content(
+                    model='gemini-2.0-flash-001',
+                    contents=f"Extract a google maps search query from the messages overall {str(request.messages)}",
+                    config=types.GenerateContentConfig(
+                        system_instruction=constants.REWRITE_SEARCH_QUERY
+                    )
+                ).text
                 
-            response_builder["places"] = [place.model_dump() for place in places]
-            yield f"event: response\ndata: {json.dumps(response_builder)}\n\n"
-            yield "event: end\ndata: {}\n\n"
+                print(search_query)
+                
+                places = await get_places(search_query)
+
+                response_builder = {
+                    "response": "",
+                    "places": [],
+                }
+
+                for chunk in client.models.generate_content_stream(
+                    model='gemini-2.0-flash-001', contents=f"Describe the places overall briefly {str(places)}"
+                ):
+                    if chunk and chunk.text:
+                        response_builder["response"] += chunk.text
+                        yield f"event: response\ndata: {json.dumps(response_builder)}\n\n"
+                    
+                response_builder["places"] = [place.model_dump() for place in places]
+                yield f"event: response\ndata: {json.dumps(response_builder)}\n\n"
+                yield "event: end\ndata: {}\n\n"
+            else:
+                # get a search query from the messages overall
+                search_query = client.models.generate_content(
+                    model='gemini-2.0-flash-001',
+                    contents=f"Extract a google maps search query from the messages overall {str(request.messages)}",
+                    config=types.GenerateContentConfig(
+                        system_instruction=constants.REWRITE_SEARCH_QUERY
+                    )
+                ).text
+                
+                print(search_query)
+                
+                places = await get_places(search_query)
+
+                response_builder = {
+                    "response": "",
+                    "places": [],
+                }
+
+                for chunk in client.models.generate_content_stream(
+                    model='gemini-2.0-flash-001', contents=f"Describe the places overall briefly {str(places)}"
+                ):
+                    if chunk and chunk.text:
+                        response_builder["response"] += chunk.text
+                        yield f"event: response\ndata: {json.dumps(response_builder)}\n\n"
+                    
+                response_builder["places"] = [place.model_dump() for place in places]
+                yield f"event: response\ndata: {json.dumps(response_builder)}\n\n"
+                yield "event: end\ndata: {}\n\n"
     
         except Exception as e:
             yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
