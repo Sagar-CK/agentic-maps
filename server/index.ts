@@ -115,13 +115,18 @@ const handleJoinSearchSession = async (
         throw new Error("Search session not found");
       }
 
-      // Send back the search session information and results
-      ws.send(
-        JSON.stringify({
-          type: "searchSessionJoined",
-          session: searchSession,
-        }),
-      );
+      // Tell all users in the search session that the user has joined
+      searchSession.userSessionIds.map(async (userId) => {
+        const userSession = userSessionManager.getSession(userId);
+        if (userSession) {
+          userSession.ws.send(
+            JSON.stringify({
+              type: "searchSessionUpdated",
+              session: searchSession,
+            }),
+          );
+        }
+      });
     } catch (error) {
       console.error("Error processing search:", error);
       ws.send(
