@@ -31,7 +31,7 @@ class Relevancy(BaseModel):
 class ChatRequest(BaseModel):
     location: Location
     messages: List[Message]
-    proposed_location_ids = Optional[List[Relevancy]]
+    proposed_location_ids: Optional[List[str]] = []
 
 class Relevancies(BaseModel):
     relevancies: List[Relevancy]

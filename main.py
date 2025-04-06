@@ -10,10 +10,19 @@ import constants
 
 from google import genai
 from google.genai import types
+from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=[""],
+    allow_headers=[""],
+)
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 GOOGLE_BEARER_TOKEN = os.getenv("GOOGLE_BEARER_TOKEN")
@@ -46,8 +55,8 @@ async def get_places(search_query: str):
             places = []
             complete_places = []
             for place in data.get("places", []):
-                if not place.get("currentOpeningHours") or not place.get("currentOpeningHours").get("openNow"):
-                    continue
+                # if not place.get("currentOpeningHours") or not place.get("currentOpeningHours").get("openNow"):
+                #     continue
                 if not place.get("userRatingCount") or place.get("userRatingCount") < 50:
                     continue
                 if place.get("rating") and place.get("rating") <= 3.0:
@@ -79,7 +88,7 @@ async def get_places(search_query: str):
 async def chat(request: ChatRequest):
     async def event_stream():
         try:
-            if(len(request.messages) == 0):
+            if(len(request.messages) <= 2):
                 # get a search query from the messages overall
                 search_query = client.models.generate_content(
                     model='gemini-2.0-flash-001',
@@ -89,9 +98,10 @@ async def chat(request: ChatRequest):
                     )
                 ).text
                 
-                print(search_query)
                 
                 places = await get_places(search_query)
+                
+                pprint(places)
 
                 response_builder = {
                     "response": "",
@@ -107,8 +117,11 @@ async def chat(request: ChatRequest):
                     
                 response_builder["places"] = [place.model_dump() for place in places]
                 yield f"event: response\ndata: {json.dumps(response_builder)}\n\n"
-                yield "event: end\ndata: {}\n\n"
             else:
+                response_builder = {
+                    "response": "",
+                    "places": [],
+                }
                 
                 complete_places = ""
                 with open("places.json", "r") as f:
@@ -117,7 +130,7 @@ async def chat(request: ChatRequest):
                 # ask the model based on the conversation history to map the places to new relevancy scores
                 relevancies = client.models.generate_content(
                     model='gemini-2.0-flash-001',
-                    contents=f"Map the places to new relevancy scores based on the conversation history {str(request.messages)}",
+                    contents=f"Map the places to new relevancy scores based on the conversation history {str(request.messages)} {str(complete_places)}",
                     config=types.GenerateContentConfig(
                         system_instruction=constants.MAP_PLACES_TO_RELEVANCY,
                         response_mime_type="application/json",
@@ -142,7 +155,7 @@ async def chat(request: ChatRequest):
                             ))
 
                 for chunk in client.models.generate_content_stream(
-                    model='gemini-2.0-flash-001', contents=f"Describe the new places overall briefly {str(places)}, these were the old relevancies {str(relevancies)}"
+                    model='gemini-2.0-flash-001', contents=f"Describe the new places overall {str(places)}, these were the old relevancies {str(relevancies)}, don't refer to relevancies explicity, but mention why you think certain places are more relevant than others."
                 ):
                     if chunk and chunk.text:
                         response_builder["response"] += chunk.text
@@ -150,7 +163,6 @@ async def chat(request: ChatRequest):
                     
                 response_builder["places"] = [place.model_dump() for place in places]
                 yield f"event: response\ndata: {json.dumps(response_builder)}\n\n"
-                yield "event: end\ndata: {}\n\n"
     
         except Exception as e:
             yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
