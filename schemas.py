@@ -30,6 +30,7 @@ class Relevancy(BaseModel):
     relevancy: float
 
 class ChatRequest(BaseModel):
+    search_again: bool
     location: Location
     messages: List[Message]
     proposed_location_ids: Optional[List[str]] = []
