@@ -14,7 +14,8 @@ class Place(BaseModel):
     website_url: Optional[str] = Field(None, description="Website URL of the place")
     name: Optional[str] = Field(None, description="Name of the place")
     type: Optional[str] = Field(None, description="Type of the place")
-    relevancy: Optional[float] = Field(None, description="Relevancy score of the place")
+    rating: Optional[float] = Field(None, description="Rating of the place")
+    relevancy: Optional[float] = Field(None, description="Relevancy score of the place relative to the context")
 
 class Response(BaseModel):
     response: str = Field(..., description="Response message")

@@ -70,7 +70,8 @@ async def get_places(search_query: str):
                     website_url=place.get("googleMapsUri"),
                     name=place.get("displayName").get("text"),
                     type=place.get("primaryType"),
-                    relevancy=place.get("rating", 0),
+                    relevancy=1,
+                    rating=place.get("rating"),
                     latitude=place.get("location").get("latitude"),
                     longitude=place.get("location").get("longitude"),
                 ))
@@ -149,6 +150,7 @@ async def chat(request: ChatRequest):
                                 website_url=place.get("googleMapsUri"),
                                 name=place.get("displayName").get("text"),
                                 type=place.get("primaryType"),
+                                rating=place.get("rating"),
                                 relevancy=relevancy.relevancy,
                                 latitude=place.get("location").get("latitude"),
                                 longitude=place.get("location").get("longitude"),
